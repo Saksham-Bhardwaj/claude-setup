@@ -2,13 +2,17 @@
 """
 Stop hook — block completion if tests are failing.
 Only activates in projects that have a pytest.ini, pyproject.toml, or package.json.
-Uses stop_hook_active to prevent infinite loops (if Claude is already retrying, let it stop).
+Uses stop_hook_active and a file-based retry counter to prevent infinite loops.
 """
 
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
+
+MAX_RETRIES = 2
+COUNTER_FILE = Path("/tmp/claude_stop_hook_count")
 
 
 def is_dev_ready():
@@ -80,6 +84,34 @@ def run_tests(command):
         return False, "Tests timed out after 120 seconds"
 
 
+def get_retry_count():
+    """Read the current retry count from the temp file."""
+    try:
+        if COUNTER_FILE.exists():
+            # Reset if file is stale (> 1 hour = different session)
+            if time.time() - COUNTER_FILE.stat().st_mtime > 3600:
+                return 0
+            return int(COUNTER_FILE.read_text().strip())
+    except (ValueError, OSError):
+        pass
+    return 0
+
+
+def increment_retry_count():
+    """Increment the retry counter."""
+    count = get_retry_count() + 1
+    COUNTER_FILE.write_text(str(count))
+    return count
+
+
+def reset_retry_count():
+    """Reset the retry counter (tests passed or session done)."""
+    try:
+        COUNTER_FILE.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def main():
     try:
         data = json.load(sys.stdin)
@@ -87,6 +119,12 @@ def main():
         # CRITICAL: if stop_hook_active is True, Claude is already retrying after
         # a previous stop-block. Let it stop to avoid infinite loops.
         if data.get("stop_hook_active", False):
+            reset_retry_count()
+            sys.exit(0)
+
+        # If we've already blocked MAX_RETRIES times, let Claude stop
+        if get_retry_count() >= MAX_RETRIES:
+            reset_retry_count()
             sys.exit(0)
 
         command, label = detect_test_runner()
@@ -96,13 +134,14 @@ def main():
         passed, output = run_tests(command)
 
         if passed:
+            reset_retry_count()
             sys.exit(0)
         else:
-            # Truncate output to avoid overwhelming Claude
+            count = increment_retry_count()
             truncated = output[:800] if len(output) > 800 else output
             print(json.dumps({
                 "decision": "block",
-                "reason": f"Tests are failing ({label}). Fix them before completing.\n\n{truncated}"
+                "reason": f"Tests are failing ({label}, attempt {count}/{MAX_RETRIES}). Fix them before completing.\n\n{truncated}"
             }))
             sys.exit(0)
 

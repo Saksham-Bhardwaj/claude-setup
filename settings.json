@@ -5,13 +5,14 @@
       "Bash(cat:*)",
       "Bash(gh issue edit:*)",
       "Bash(ls:*)",
+      "Read(//Users/sakshambhardwaj/Monetization/SOC2Snap/**)",
       "Bash(npm run test:*)"
     ]
   },
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
@@ -22,7 +23,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "",
+        "matcher": "Write|Edit|MultiEdit",
         "hooks": [
           {
             "type": "command",
